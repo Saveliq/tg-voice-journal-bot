@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+*.db
+*.db-journal
+.venv/
+venv/
+*.ogg
+.idea/
+.vscode/
