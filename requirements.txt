@@ -7,3 +7,4 @@ alembic>=1.13
 pydantic-settings>=2.1
 python-dotenv>=1.0
 faster-whisper>=1.0
+APScheduler>=3.10,<4.0

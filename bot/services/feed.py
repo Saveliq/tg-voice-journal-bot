@@ -6,8 +6,9 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.db.crud import get_entries_between
+from bot.db.crud import get_entries_between, get_headache_entries_for_date
 from bot.db.models import Entry, User
+from bot.services.headache import format_headache_feed_line
 from bot.services.time_utils import today_bounds
 
 # Лимит Telegram на текст сообщения — 4096 символов. Берём с запасом.
@@ -48,27 +49,37 @@ def _split_entries(entries: list[Entry]) -> tuple[str | None, list[str]]:
     return sleep_line, rest
 
 
-def build_feed_text(entries: list[Entry]) -> str:
+def build_feed_text(
+    entries: list[Entry], headache_lines: list[str] | None = None
+) -> str:
     """Собрать текст ленты.
 
     Структура:
         <дата>
 
-        сон X часов        ← если есть, всегда сразу после даты
+        сон X часов          ← если есть, сразу после даты
+        🤕 Болела голова …   ← записи дневника ГБ (каждая на своей строке)
         (пустая строка)
-        запись1. запись2.  ← остальные через '. '
+        запись1. запись2.    ← текст/голос через '. '
     """
     header = _today_header()
-
-    if not entries:
-        return f"{header}\n\n{EMPTY_HINT}"
+    headache_lines = headache_lines or []
 
     sleep_line, rest_parts = _split_entries(entries)
 
-    # Собираем полный текст для проверки лимита
-    body_parts: list[str] = []
+    if not entries and not headache_lines:
+        return f"{header}\n\n{EMPTY_HINT}"
+
+    # «Верхний» блок: сон + строки головной боли (каждая со своей строки)
+    top_lines: list[str] = []
     if sleep_line:
-        body_parts.append(sleep_line)
+        top_lines.append(sleep_line)
+    # headache_lines уже безопасный HTML (см. format_headache_feed_line)
+    top_lines.extend(headache_lines)
+
+    body_parts: list[str] = []
+    if top_lines:
+        body_parts.append("\n".join(top_lines))
     if rest_parts:
         body_parts.append(". ".join(rest_parts))
 
@@ -78,9 +89,10 @@ def build_feed_text(entries: list[Entry]) -> str:
     if len(text) <= SAFE_LIMIT:
         return text
 
-    # Не влезает — обрезаем rest с конца, сон сохраняем всегда.
+    # Не влезает — обрезаем текстовые записи с конца, верхний блок сохраняем.
+    top_block = "\n".join(top_lines)
+    overhead = len(header) + 2 + (len(top_block) + 2 if top_block else 0) + len(TRUNCATED_NOTE)
     truncated: list[str] = []
-    overhead = len(header) + 2 + (len(sleep_line) + 2 if sleep_line else 0) + len(TRUNCATED_NOTE)
     running = overhead
     for part in reversed(rest_parts):
         addition = len(part) + 2
@@ -91,18 +103,22 @@ def build_feed_text(entries: list[Entry]) -> str:
     truncated.reverse()
 
     body_parts = []
-    if sleep_line:
-        body_parts.append(sleep_line)
+    if top_block:
+        body_parts.append(top_block)
     if truncated:
         body_parts.append(". ".join(truncated) + TRUNCATED_NOTE)
-    elif not sleep_line:
+    elif not top_block:
         body_parts.append(EMPTY_HINT)
 
     return f"{header}\n\n" + "\n\n".join(body_parts)
 
 
 async def render_today_feed(session: AsyncSession, user: User) -> str:
-    """Загрузить записи за сегодня и отдать готовый текст ленты."""
+    """Загрузить записи за сегодня (текст/голос + ГБ) и отдать текст ленты."""
     start, end = today_bounds()
     entries = await get_entries_between(session, user, start, end)
-    return build_feed_text(entries)
+
+    hd_entries = await get_headache_entries_for_date(session, user, start.date())
+    headache_lines = [format_headache_feed_line(e) for e in hd_entries]
+
+    return build_feed_text(entries, headache_lines)

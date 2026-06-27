@@ -5,6 +5,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, F, Router
+from aiogram.filters import StateFilter
 from aiogram.types import Message
 
 from bot.db import crud
@@ -30,7 +31,7 @@ async def _refresh_feed(bot: Bot, session, user) -> None:
     await safe_edit_or_recreate(bot, session, user, text, feed_keyboard())
 
 
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
 async def on_text(message: Message, bot: Bot) -> None:
     if message.from_user is None or message.text is None:
         return
@@ -48,7 +49,7 @@ async def on_text(message: Message, bot: Bot) -> None:
             await _refresh_feed(bot, session, user)
 
 
-@router.message(F.voice)
+@router.message(StateFilter(None), F.voice)
 async def on_voice(message: Message, bot: Bot) -> None:
     if message.from_user is None or message.voice is None:
         return

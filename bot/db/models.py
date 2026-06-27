@@ -2,9 +2,20 @@
 from __future__ import annotations
 
 import enum
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -36,6 +47,9 @@ class User(Base):
     pinned_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # на будущее — для локального «сегодня» пользователя; сейчас фиксируем UTC
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    # Персональное расписание ежедневного вопроса о ГБ (HH:MM в UTC)
+    prompt_time: Mapped[str] = mapped_column(String(5), default="20:00")
+    prompt_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     entries: Mapped[list["Entry"]] = relationship(
@@ -57,3 +71,38 @@ class Entry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
     user: Mapped["User"] = relationship(back_populates="entries")
+
+
+class Medication(Base):
+    """Справочник препаратов пользователя — для меню «ранее введённых вариантов»."""
+
+    __tablename__ = "medications"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_medication"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class HeadacheEntry(Base):
+    """Запись дневника головной боли. На один день может быть несколько записей."""
+
+    __tablename__ = "headache_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    # День, к которому привязана запись (важно: не дата нажатия кнопки)
+    entry_date: Mapped[date] = mapped_column(Date, index=True)
+    had_headache: Mapped[bool] = mapped_column(Boolean)
+    took_painkiller: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    medication_id: Mapped[int | None] = mapped_column(
+        ForeignKey("medications.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    medication: Mapped["Medication | None"] = relationship(lazy="joined")

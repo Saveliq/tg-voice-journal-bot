@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
 
+    # Время ежедневного вопроса о головной боли по умолчанию (HH:MM, в UTC).
+    # Используется для новых пользователей; каждый может изменить в настройках.
+    headache_prompt_time: str = "20:00"
+
+    # Telegram id администратора — доступ к /testprompt
+    admin_id: int = 780994100
+
     # Прокси для доступа к api.telegram.org (нужен при блокировке Telegram).
     # Форматы: http://host:port  или  socks5://user:pass@host:port
     proxy_url: str = ""
