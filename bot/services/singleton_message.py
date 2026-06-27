@@ -68,6 +68,8 @@ async def safe_edit_or_recreate(
     user: User,
     text: str,
     keyboard: InlineKeyboardMarkup | None = None,
+    *,
+    prefer_message_id: int | None = None,
 ) -> None:
     """Обновить главное сообщение: отредактировать, иначе пересоздать.
 
@@ -76,7 +78,17 @@ async def safe_edit_or_recreate(
     3. Если Telegram говорит, что редактировать нельзя → удаляем старое
        (best-effort) и отправляем новое, обновив id в БД.
     4. Любая другая ошибка — логируем и пробрасываем, не заглатываем.
+
+    ``prefer_message_id`` — id сообщения, которое заведомо является «живым»
+    (например, то, на котором пользователь нажал inline-кнопку). Если оно
+    отличается от сохранённого в БД, мы считаем его актуальным и синхронизируем
+    pinned_message_id с ним. Это защищает от «протухшего» pinned_message_id
+    после перезапусков бота, из-за которого сообщение пересоздавалось вместо
+    редактирования.
     """
+    if prefer_message_id is not None and prefer_message_id != user.pinned_message_id:
+        await crud.set_pinned_message_id(session, user, prefer_message_id)
+
     if user.pinned_message_id is None:
         await _send_new(bot, session, user, text, keyboard)
         return

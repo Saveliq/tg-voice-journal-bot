@@ -1,14 +1,20 @@
-# Используется на этапе деплоя (этап 10 плана), не на dev-этапе.
-# Для prod переключите DATABASE_URL на Postgres (см. ниже).
 version: "3.9"
 
 services:
   bot:
     build: .
     restart: unless-stopped
-    env_file: .env
     environment:
-      DATABASE_URL: postgresql+asyncpg://diary:diary@db:5432/diary
+      BOT_TOKEN: ${BOT_TOKEN}
+      DATABASE_URL: postgresql+asyncpg://diary:${POSTGRES_PASSWORD:-diary}@db:5432/diary
+      WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      PROXY_URL: ${PROXY_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      # Кэш Whisper-модели — без этого модель скачивается при каждом пересборке
+      - whisper_cache:/root/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
@@ -18,7 +24,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: diary
-      POSTGRES_PASSWORD: diary
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-diary}
       POSTGRES_DB: diary
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -30,3 +36,4 @@ services:
 
 volumes:
   pgdata:
+  whisper_cache:

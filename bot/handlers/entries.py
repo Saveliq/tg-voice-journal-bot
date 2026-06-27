@@ -14,6 +14,7 @@ from bot.handlers.start import delete_user_message
 from bot.keyboards import feed_keyboard
 from bot.services.feed import render_today_feed
 from bot.services.singleton_message import safe_edit_or_recreate, user_lock
+from bot.services.sleep import maybe_record_sleep
 from bot.services.voice import transcribe_voice
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ async def on_text(message: Message, bot: Bot) -> None:
             user = await crud.get_or_create_user(session, tg_id)
             if content:
                 await crud.add_entry(session, user, content, SourceType.text)
+                await maybe_record_sleep(session, user, content)
             # Удаляем ввод только после сохранения записи.
             await delete_user_message(message)
             await _refresh_feed(bot, session, user)
@@ -81,4 +83,5 @@ async def on_voice(message: Message, bot: Bot) -> None:
                 return
 
             await crud.add_entry(session, user, text, SourceType.voice)
+            await maybe_record_sleep(session, user, text)
             await _refresh_feed(bot, session, user)
