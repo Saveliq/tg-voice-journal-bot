@@ -1,6 +1,26 @@
 version: "3.9"
 
 services:
+  # Init-контейнер: парсит VLESS_URL и пишет xray/config.json в shared volume, затем завершается.
+  xray-config:
+    image: python:3.11-alpine
+    environment:
+      VLESS_URL: ${VLESS_URL}
+      OUTPUT_PATH: /xray-config/config.json
+    volumes:
+      - xray_config:/xray-config
+      - ./xray/generate_config.py:/generate_config.py:ro
+    command: python /generate_config.py
+
+  proxy:
+    image: ghcr.io/xtls/xray-core:latest
+    restart: unless-stopped
+    volumes:
+      - xray_config:/etc/xray
+    depends_on:
+      xray-config:
+        condition: service_completed_successfully
+
   bot:
     build: .
     restart: unless-stopped
@@ -10,14 +30,15 @@ services:
       WHISPER_MODEL_SIZE: ${WHISPER_MODEL_SIZE:-small}
       WHISPER_DEVICE: ${WHISPER_DEVICE:-cpu}
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
-      PROXY_URL: ${PROXY_URL:-}
+      PROXY_URL: socks5://proxy:1080
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      # Кэш Whisper-модели — без этого модель скачивается при каждом пересборке
       - whisper_cache:/root/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
+      proxy:
+        condition: service_started
 
   db:
     image: postgres:16-alpine
@@ -37,3 +58,4 @@ services:
 volumes:
   pgdata:
   whisper_cache:
+  xray_config:

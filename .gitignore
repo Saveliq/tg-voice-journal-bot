@@ -8,3 +8,4 @@ venv/
 *.ogg
 .idea/
 .vscode/
+xray/*.json
