@@ -1,21 +1,23 @@
 version: "3.9"
 
 services:
-  # Init-контейнер: парсит VLESS_URL и пишет xray/config.json в shared volume, затем завершается.
+  # Init-контейнер: парсит VLESS_URL и пишет config.json в shared volume, затем завершается.
+  # Использует образ бота (build: .) — скрипт уже внутри образа, без монтирования с хоста.
   xray-config:
-    image: python:3.11-alpine
+    build: .
+    image: diary-bot:latest
     environment:
       VLESS_URL: ${VLESS_URL}
       OUTPUT_PATH: /xray-config/config.json
     volumes:
       - xray_config:/xray-config
-      - ./xray/generate_config.py:/generate_config.py:ro
-    command: python /generate_config.py
+    command: python /app/xray/generate_config.py
 
   proxy:
-    image: ghcr.io/xtls/xray-core:latest
+    image: teddysun/xray:latest
     restart: unless-stopped
     volumes:
+      # Готовый config.json лежит в корне volume → /etc/xray/config.json (путь по умолчанию)
       - xray_config:/etc/xray
     depends_on:
       xray-config:
@@ -23,6 +25,7 @@ services:
 
   bot:
     build: .
+    image: diary-bot:latest
     restart: unless-stopped
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
