@@ -9,8 +9,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utcnow() -> datetime:
-    """Текущее время в UTC (без tz-инфо, секундная точность хранится в БД)."""
-    return datetime.now(timezone.utc).replace(microsecond=0)
+    """Текущее время в UTC как naive datetime (без tz-инфо).
+
+    Колонки объявлены TIMESTAMP WITHOUT TIME ZONE; Postgres/asyncpg не принимает
+    timezone-aware значения в такие колонки. Весь код хранит и сравнивает даты
+    в naive-UTC (см. services/time_utils), поэтому возвращаем naive.
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
 
 
 class Base(DeclarativeBase):
