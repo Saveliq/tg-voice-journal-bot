@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db import crud
 from bot.db.models import Entry, SourceType, User
-from bot.services.time_utils import today_bounds
+from bot.services.time_utils import today_bounds_utc
 
 # --- Паттерны извлечения часов ---
 
@@ -108,7 +108,7 @@ async def maybe_record_sleep(
     if hours is None or hours <= 0 or hours > 24:
         return False
 
-    start, end = today_bounds()
+    start, end = today_bounds_utc(user)
     today_entries = await crud.get_entries_between(session, user, start, end)
     if _sleep_already_recorded(today_entries):
         return False

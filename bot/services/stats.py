@@ -12,16 +12,16 @@ from bot.db.crud import (
     get_all_entries,
 )
 from bot.db.models import User
-from bot.services.time_utils import day_bounds, today_bounds
+from bot.services.time_utils import day_bounds_utc, local_today, today_bounds_utc
 
 DAYS_WINDOW = 7
 
 
 async def render_stats(session: AsyncSession, user: User) -> str:
-    """Сформировать текст раздела статистики."""
+    """Сформировать текст раздела статистики (в локальном поясе пользователя)."""
     total = await count_entries(session, user)
 
-    start_today, end_today = today_bounds()
+    start_today, end_today = today_bounds_utc(user)
     today_count = await count_entries_between(session, user, start_today, end_today)
 
     lines = [
@@ -33,10 +33,10 @@ async def render_stats(session: AsyncSession, user: User) -> str:
         f"<b>Последние {DAYS_WINDOW} дней:</b>",
     ]
 
-    today_date = start_today.date()
+    today_date = local_today(user)
     for i in range(DAYS_WINDOW):
         day = today_date - timedelta(days=i)
-        d_start, d_end = day_bounds(day)
+        d_start, d_end = day_bounds_utc(user, day)
         cnt = await count_entries_between(session, user, d_start, d_end)
         lines.append(f"{day.isoformat()}: {cnt} записей")
 

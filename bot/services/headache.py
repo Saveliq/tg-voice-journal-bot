@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.db import crud
 from bot.db.models import HeadacheEntry, User
 from bot.keyboards import headache_ask_keyboard
-from bot.services.time_utils import today_bounds
+from bot.services.time_utils import local_today
 
 logger = logging.getLogger(__name__)
 
@@ -73,15 +73,17 @@ async def headache_lines_for_date(
     return [format_headache_feed_line(e) for e in entries]
 
 
-def today_date() -> date:
-    """Текущая календарная дата в naive-UTC (как и весь учёт «сегодня»)."""
-    start, _end = today_bounds()
-    return start.date()
+def today_date(user: User) -> date:
+    """Текущая локальная дата пользователя (его «сегодня»)."""
+    return local_today(user)
 
 
 async def send_daily_prompt(bot: Bot, session: AsyncSession, user: User) -> None:
-    """Отправить пользователю ежедневный вопрос о головной боли за сегодня."""
-    d = today_date()
+    """Отправить пользователю ежедневный вопрос о головной боли за сегодня.
+
+    Дата привязана к сообщению (локальное сегодня пользователя) — без выбора даты.
+    """
+    d = today_date(user)
     try:
         await bot.send_message(
             chat_id=user.telegram_id,

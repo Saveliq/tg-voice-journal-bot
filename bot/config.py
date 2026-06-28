@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     # Telegram id администратора — доступ к /testprompt
     admin_id: int = 780994100
 
+    # Часовой пояс по умолчанию (IANA) для новых пользователей.
+    # Каждый может изменить свой в настройках.
+    default_tz: str = "Europe/Moscow"
+
     # Прокси для доступа к api.telegram.org (нужен при блокировке Telegram).
     # Форматы: http://host:port  или  socks5://user:pass@host:port
     proxy_url: str = ""

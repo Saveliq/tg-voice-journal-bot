@@ -35,6 +35,7 @@ from bot.keyboards import (
     CB_HD_START,
     feed_keyboard,
     headache_ask_keyboard,
+    headache_date_picker_keyboard,
     medication_keyboard,
     painkiller_ask_keyboard,
 )
@@ -98,7 +99,7 @@ async def _finish(
         await safe_edit_or_recreate(bot, session, user, feed_text, feed_keyboard())
 
 
-# --- Ручной запуск опроса (кнопка «🤕 Голова» на ленте) ---
+# --- Ручной запуск: выбор даты записи (кнопка «🤕 Голова» на ленте) ---
 
 @router.callback_query(F.data == CB_HD_START)
 async def on_start(callback: CallbackQuery, bot: Bot) -> None:
@@ -112,8 +113,34 @@ async def on_start(callback: CallbackQuery, bot: Bot) -> None:
             if msg_id is not None:
                 await crud.set_pinned_message_id(session, user, msg_id)
                 await _edit(
+                    bot, tg_id, msg_id,
+                    "На какой день сделать запись?",
+                    headache_date_picker_keyboard(hd.today_date(user)),
+                )
+    await callback.answer()
+
+
+# --- Выбрана дата записи → начать опрос на эту дату ---
+
+@router.callback_query(F.data.startswith("hd:pick:"))
+async def on_pick_date(callback: CallbackQuery, bot: Bot) -> None:
+    # формат: hd:pick:<ISO-date>
+    iso = callback.data.split(":", 2)[2]
+    tg_id = callback.from_user.id
+    msg_id = _clicked_id(callback)
+    async with user_lock(tg_id):
+        async with async_session_factory() as session:
+            user = await crud.get_or_create_user(session, tg_id)
+            try:
+                entry_date = date.fromisoformat(iso)
+            except ValueError:
+                entry_date = hd.today_date(user)
+            # Это «живое» сообщение — адаптируем как pinned, опрос пойдёт на месте.
+            if msg_id is not None:
+                await crud.set_pinned_message_id(session, user, msg_id)
+                await _edit(
                     bot, tg_id, msg_id, hd.PROMPT_TEXT,
-                    headache_ask_keyboard(hd.today_date()),
+                    headache_ask_keyboard(entry_date),
                 )
     await callback.answer()
 
@@ -125,16 +152,16 @@ async def on_had(callback: CallbackQuery, bot: Bot) -> None:
     # формат: hd:had:<0|1>:<ISO-date>
     _, _, flag, iso = callback.data.split(":", 3)
     had = flag == "1"
-    try:
-        entry_date = date.fromisoformat(iso)
-    except ValueError:
-        entry_date = hd.today_date()
 
     tg_id = callback.from_user.id
     msg_id = _clicked_id(callback)
     async with user_lock(tg_id):
         async with async_session_factory() as session:
             user = await crud.get_or_create_user(session, tg_id)
+            try:
+                entry_date = date.fromisoformat(iso)
+            except ValueError:
+                entry_date = hd.today_date(user)
             entry = await crud.create_headache_entry(session, user, entry_date, had)
 
             if not had:

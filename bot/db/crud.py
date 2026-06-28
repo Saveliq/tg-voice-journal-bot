@@ -26,6 +26,7 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int) -> User:
         user = User(
             telegram_id=telegram_id,
             prompt_time=settings.headache_prompt_time,
+            timezone=settings.default_tz,
         )
         session.add(user)
         await session.commit()
@@ -113,17 +114,18 @@ async def get_all_users(session: AsyncSession) -> list[User]:
     return list(result.scalars().all())
 
 
-async def get_users_for_prompt_time(
-    session: AsyncSession, hh_mm: str
-) -> list[User]:
-    """Пользователи с включённым напоминанием на указанное время (HH:MM, UTC)."""
+async def get_enabled_users(session: AsyncSession) -> list[User]:
+    """Пользователи с включённым ежедневным напоминанием."""
     result = await session.execute(
-        select(User).where(
-            User.prompt_enabled.is_(True),
-            User.prompt_time == hh_mm,
-        )
+        select(User).where(User.prompt_enabled.is_(True))
     )
     return list(result.scalars().all())
+
+
+async def set_timezone(session: AsyncSession, user: User, tz_name: str) -> None:
+    user.timezone = tz_name
+    session.add(user)
+    await session.commit()
 
 
 async def set_prompt_time(session: AsyncSession, user: User, hh_mm: str) -> None:

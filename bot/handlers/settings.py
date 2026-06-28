@@ -16,20 +16,28 @@ from bot.handlers.start import delete_user_message
 from bot.keyboards import (
     CB_SET_TIME,
     CB_SET_TOGGLE,
+    CB_SET_TZ,
     CB_SETTINGS,
+    TIMEZONES,
     settings_keyboard,
+    timezone_keyboard,
 )
 from bot.services.singleton_message import safe_edit_or_recreate, user_lock
+from bot.services.time_utils import local_now
 
 logger = logging.getLogger(__name__)
 router = Router(name="settings")
 
 _TIME_RE = re.compile(r"^([01]?\d|2[0-3])[:.\s]([0-5]?\d)$")
+_TZ_LABELS = {iana: label for label, iana in TIMEZONES}
 
 ASK_TIME_TEXT = (
     "🕐 <b>Во сколько присылать напоминание?</b>\n\n"
-    "Отправь время в формате <b>ЧЧ:ММ</b> (по UTC), например <code>20:00</code>."
+    "Отправь время в формате <b>ЧЧ:ММ</b> (в твоём часовом поясе), "
+    "например <code>20:00</code>."
 )
+
+ASK_TZ_TEXT = "🌍 <b>Выбери часовой пояс</b>"
 
 
 class SettingsStates(StatesGroup):
@@ -46,9 +54,13 @@ def parse_time(value: str) -> str | None:
 
 def _settings_text(user: User) -> str:
     status = "включено ✅" if user.prompt_enabled else "выключено 🔕"
+    tz_label = _TZ_LABELS.get(user.timezone, user.timezone)
+    local = local_now(user).strftime("%H:%M")
     return (
         "⚙️ <b>Настройки напоминания</b>\n\n"
-        f"Время: <b>{user.prompt_time}</b> (UTC)\n"
+        f"Время: <b>{user.prompt_time}</b>\n"
+        f"Часовой пояс: <b>{tz_label}</b>\n"
+        f"Сейчас у тебя: <b>{local}</b>\n"
         f"Напоминание: <b>{status}</b>"
     )
 
@@ -98,6 +110,36 @@ async def on_set_time(callback: CallbackQuery, bot: Bot, state: FSMContext) -> N
                 prefer_message_id=_clicked_id(callback),
             )
     await callback.answer()
+
+
+@router.callback_query(F.data == CB_SET_TZ)
+async def on_set_tz(callback: CallbackQuery, bot: Bot) -> None:
+    tg_id = callback.from_user.id
+    async with user_lock(tg_id):
+        async with async_session_factory() as session:
+            user = await crud.get_or_create_user(session, tg_id)
+            await safe_edit_or_recreate(
+                bot, session, user, ASK_TZ_TEXT, timezone_keyboard(),
+                prefer_message_id=_clicked_id(callback),
+            )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("tz:set:"))
+async def on_tz_pick(callback: CallbackQuery, bot: Bot) -> None:
+    # формат: tz:set:<IANA>
+    tz_name = callback.data.split(":", 2)[2]
+    tg_id = callback.from_user.id
+    async with user_lock(tg_id):
+        async with async_session_factory() as session:
+            user = await crud.get_or_create_user(session, tg_id)
+            await crud.set_timezone(session, user, tz_name)
+            await safe_edit_or_recreate(
+                bot, session, user, _settings_text(user),
+                settings_keyboard(user.prompt_enabled),
+                prefer_message_id=_clicked_id(callback),
+            )
+    await callback.answer("Часовой пояс обновлён ✅")
 
 
 @router.message(SettingsStates.awaiting_time, F.text)
