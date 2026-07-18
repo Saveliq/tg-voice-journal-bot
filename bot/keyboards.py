@@ -36,6 +36,10 @@ CB_CAL_NOOP = "cal:noop"
 CAL_MODE_VIEW = "view"
 CAL_MODE_PICK = "pick"
 
+# Режим просмотра/ввода одного дня (из календаря):
+#   day:nav:<ISO-date>   — перейти к другому дню (◀/▶)
+CB_DAY_NAV_PREFIX = "day:nav:"
+
 # --- Дневник головной боли ---
 # Схема callback_data (разделитель ':'):
 #   hd:start                       — ручной запуск: показать выбор даты
@@ -71,6 +75,40 @@ def feed_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📤 Экспорт", callback_data=CB_EXPORT),
     )
     kb.row(InlineKeyboardButton(text="⚙️ Настройки", callback_data=CB_SETTINGS))
+    return kb.as_markup()
+
+
+def day_view_keyboard(day: date) -> InlineKeyboardMarkup:
+    """Меню одного дня: запись головы, навигация по дням, возврат в обычный режим.
+
+    Пока открыт этот экран, текст/голос сохраняются заметкой на ``day``.
+    """
+    prev_day = day - timedelta(days=1)
+    next_day = day + timedelta(days=1)
+    ny, nm = day.year, day.month
+
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(
+            text="🤕 Голова на этот день", callback_data=f"hd:pick:{day.isoformat()}"
+        )
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text=f"◀️ {_date_btn_label(prev_day)}",
+            callback_data=f"{CB_DAY_NAV_PREFIX}{prev_day.isoformat()}",
+        ),
+        InlineKeyboardButton(
+            text=f"{_date_btn_label(next_day)} ▶️",
+            callback_data=f"{CB_DAY_NAV_PREFIX}{next_day.isoformat()}",
+        ),
+    )
+    kb.row(
+        InlineKeyboardButton(
+            text="📅 Календарь", callback_data=f"cal:nav:{CAL_MODE_VIEW}:{ny:04d}-{nm:02d}"
+        ),
+        InlineKeyboardButton(text="🏠 Обычный режим", callback_data=CB_FEED),
+    )
     return kb.as_markup()
 
 

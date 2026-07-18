@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 from collections import defaultdict
 from datetime import date
 
@@ -20,6 +21,21 @@ _MONTHS_RU = ("января", "февраля", "марта", "апреля", "�
                "июля", "августа", "сентября", "октября", "ноября", "декабря")
 
 _SLEEP_MARKER = "сон "
+# Ведущее «сон N часов» в тексте записи — дублирует отдельную строку сна.
+_SLEEP_DUP_RE = re.compile(r'^\s*сон\s+\d+(?:[.,]\d+)?\s*час\w*', re.IGNORECASE)
+
+
+def _strip_sleep_dup(text: str) -> str:
+    """Убрать ведущее «сон N часов» из записи (оно уже показано отдельной строкой)."""
+    m = _SLEEP_DUP_RE.match(text)
+    if not m:
+        return text
+    return text[m.end():].lstrip(" .,;:—-\n\t")
+
+
+def _visible_headache(entries: list[HeadacheEntry]) -> list[HeadacheEntry]:
+    """Только записи, где голова болела — «не болела» в экспорт не попадает."""
+    return [e for e in entries if e.had_headache]
 
 
 def _day_header(d: date) -> str:
@@ -45,7 +61,12 @@ def _group_headache_by_day(
 
 
 def _split_sleep(day_entries: list[Entry]) -> tuple[str | None, list[str]]:
-    """Вернуть (запись_сна | None, [остальные тексты]) — как в ленте бота."""
+    """Вернуть (запись_сна | None, [остальные тексты]) — как в ленте бота.
+
+    Если строка сна выделена отдельно, из остальных записей убирается
+    дублирующее ведущее «сон N часов» (напр. «сон 12 часов. Хочется спать»
+    → «Хочется спать»); полностью дублирующие записи отбрасываются.
+    """
     sleep: str | None = None
     rest: list[str] = []
     for e in day_entries:
@@ -54,6 +75,8 @@ def _split_sleep(day_entries: list[Entry]) -> tuple[str | None, list[str]]:
             sleep = content
         else:
             rest.append(content)
+    if sleep is not None:
+        rest = [r for r in (_strip_sleep_dup(x) for x in rest) if r]
     return sleep, rest
 
 
@@ -79,7 +102,7 @@ def _day_block(
 
 async def export_txt(session: AsyncSession, user: User) -> bytes:
     entries = await get_all_entries(session, user)
-    hd_entries = await get_all_headache_entries(session, user)
+    hd_entries = _visible_headache(await get_all_headache_entries(session, user))
     if not entries and not hd_entries:
         return b""
 
@@ -96,7 +119,7 @@ async def export_txt(session: AsyncSession, user: User) -> bytes:
 
 async def export_csv(session: AsyncSession, user: User) -> bytes:
     entries = await get_all_entries(session, user)
-    hd_entries = await get_all_headache_entries(session, user)
+    hd_entries = _visible_headache(await get_all_headache_entries(session, user))
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["date", "source_type", "content"])
@@ -117,7 +140,7 @@ async def export_csv(session: AsyncSession, user: User) -> bytes:
 
 async def export_json(session: AsyncSession, user: User) -> bytes:
     entries = await get_all_entries(session, user)
-    hd_entries = await get_all_headache_entries(session, user)
+    hd_entries = _visible_headache(await get_all_headache_entries(session, user))
 
     by_day = _group_by_day(entries)
     hd_by_day = _group_headache_by_day(hd_entries)

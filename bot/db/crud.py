@@ -54,8 +54,11 @@ async def add_entry(
     user: User,
     content: str,
     source_type: SourceType,
+    created_at: datetime | None = None,
 ) -> Entry:
     entry = Entry(user_id=user.id, content=content, source_type=source_type)
+    if created_at is not None:
+        entry.created_at = created_at
     session.add(entry)
     await session.commit()
     await session.refresh(entry)

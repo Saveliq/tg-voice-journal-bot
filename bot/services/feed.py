@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import re
 from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from bot.db.crud import get_entries_between, get_headache_entries_for_date
 from bot.db.models import Entry, User
 from bot.services.headache import format_headache_feed_line
-from bot.services.time_utils import local_today, today_bounds_utc
+from bot.services.time_utils import day_bounds_utc, local_today, today_bounds_utc
 
 # Лимит Telegram на текст сообщения — 4096 символов. Берём с запасом.
 TG_MESSAGE_LIMIT = 4096
@@ -30,22 +31,35 @@ def _today_header(d: date) -> str:
 
 
 _SLEEP_MARKER = "сон "
+# Ведущее «сон N часов» в записи дублирует отдельную строку сна.
+_SLEEP_DUP_RE = re.compile(r'^\s*сон\s+\d+(?:[.,]\d+)?\s*час\w*', re.IGNORECASE)
+
+
+def _strip_sleep_dup(text: str) -> str:
+    m = _SLEEP_DUP_RE.match(text)
+    if not m:
+        return text
+    return text[m.end():].lstrip(" .,;:—-\n\t")
 
 
 def _split_entries(entries: list[Entry]) -> tuple[str | None, list[str]]:
     """Разделить записи на запись сна и остальные.
 
-    Возвращает (sleep_line | None, [остальные строки]).
+    Возвращает (sleep_line | None, [остальные строки, HTML-escaped]).
+    Если строка сна выделена, из остальных убирается дублирующее ведущее
+    «сон N часов».
     """
     sleep_line: str | None = None
-    rest: list[str] = []
+    rest_raw: list[str] = []
     for e in entries:
-        content = html.escape(e.content.strip())
-        if sleep_line is None and e.content.strip().lower().startswith(_SLEEP_MARKER):
-            sleep_line = content
+        content = e.content.strip()
+        if sleep_line is None and content.lower().startswith(_SLEEP_MARKER):
+            sleep_line = html.escape(content)
         else:
-            rest.append(content)
-    return sleep_line, rest
+            rest_raw.append(content)
+    if sleep_line is not None:
+        rest_raw = [r for r in (_strip_sleep_dup(x) for x in rest_raw) if r]
+    return sleep_line, [html.escape(r) for r in rest_raw]
 
 
 def build_feed_text(
@@ -127,3 +141,14 @@ async def render_today_feed(session: AsyncSession, user: User) -> str:
     headache_lines = [format_headache_feed_line(e) for e in hd_entries]
 
     return build_feed_text(entries, headache_lines, header_date=today)
+
+
+async def render_day_feed(session: AsyncSession, user: User, day: date) -> str:
+    """Лента за произвольный день (для режима календаря/просмотра дня)."""
+    start, end = day_bounds_utc(user, day)
+    entries = await get_entries_between(session, user, start, end)
+
+    hd_entries = await get_headache_entries_for_date(session, user, day)
+    headache_lines = [format_headache_feed_line(e) for e in hd_entries]
+
+    return build_feed_text(entries, headache_lines, header_date=day)

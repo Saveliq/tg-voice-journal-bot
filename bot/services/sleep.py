@@ -7,12 +7,17 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.db import crud
 from bot.db.models import Entry, SourceType, User
-from bot.services.time_utils import today_bounds_utc
+from bot.services.time_utils import (
+    backdated_created_at,
+    day_bounds_utc,
+    today_bounds_utc,
+)
 
 # --- Паттерны извлечения часов ---
 
@@ -99,20 +104,29 @@ def _sleep_already_recorded(today_entries: list[Entry]) -> bool:
 
 
 async def maybe_record_sleep(
-    session: AsyncSession, user: User, text: str
+    session: AsyncSession, user: User, text: str, *, day: date | None = None
 ) -> bool:
-    """Если в тексте есть упоминание сна и запись за сегодня ещё не добавлена —
+    """Если в тексте есть упоминание сна и запись за день ещё не добавлена —
     создать запись вида 'сон X часов'. Вернуть True если запись была создана.
+
+    ``day`` — локальный день записи. None → сегодня. Для прошлых дней запись
+    датируется этим днём (задним числом).
     """
     hours = extract_sleep_hours(text)
     if hours is None or hours <= 0 or hours > 24:
         return False
 
-    start, end = today_bounds_utc(user)
-    today_entries = await crud.get_entries_between(session, user, start, end)
-    if _sleep_already_recorded(today_entries):
+    if day is None:
+        start, end = today_bounds_utc(user)
+        created_at = None
+    else:
+        start, end = day_bounds_utc(user, day)
+        created_at = backdated_created_at(user, day)
+
+    day_entries = await crud.get_entries_between(session, user, start, end)
+    if _sleep_already_recorded(day_entries):
         return False
 
     content = format_sleep_entry(hours)
-    await crud.add_entry(session, user, content, SourceType.text)
+    await crud.add_entry(session, user, content, SourceType.text, created_at=created_at)
     return True

@@ -30,9 +30,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from bot.db import crud
 from bot.db.session import async_session_factory
+from bot.handlers.daymode import DayView
 from bot.handlers.start import delete_user_message
 from bot.keyboards import (
     CB_HD_START,
+    day_view_keyboard,
     feed_keyboard,
     headache_ask_keyboard,
     headache_date_picker_keyboard,
@@ -40,8 +42,9 @@ from bot.keyboards import (
     painkiller_ask_keyboard,
 )
 from bot.services import headache as hd
-from bot.services.feed import render_today_feed
+from bot.services.feed import render_day_feed, render_today_feed
 from bot.services.singleton_message import safe_edit_or_recreate, user_lock
+from bot.services.time_utils import local_today
 
 logger = logging.getLogger(__name__)
 router = Router(name="headache")
@@ -76,27 +79,46 @@ async def _edit(
 
 
 async def _finish(
-    bot: Bot, session, user, chat_id: int, wizard_id: int, confirm_text: str
+    bot: Bot,
+    session,
+    user,
+    chat_id: int,
+    wizard_id: int,
+    confirm_text: str,
+    entry_date: date,
+    state: FSMContext,
 ) -> None:
-    """Показать подтверждение, затем вернуть «главное меню» (ленту).
+    """Показать подтверждение, затем вернуть меню.
 
-    Если опрос шёл на живом сообщении-ленте — возвращаем ленту на том же
-    сообщении. Иначе (отдельный промпт) — удаляем его и обновляем основную ленту.
+    Если запись сделана на сегодня — возвращаем обычную ленту. Если на другой
+    день (из календаря/выбора даты) — возвращаемся на экран этого дня, чтобы
+    можно было продолжить ввод по нему.
+
+    Если опрос шёл на живом сообщении-ленте — обновляем его на месте. Иначе
+    (отдельный промпт) — удаляем его и пересоздаём основное сообщение.
     """
     await _edit(bot, chat_id, wizard_id, confirm_text, None)
     await asyncio.sleep(TRANSIENT_DELAY)
 
-    feed_text = await render_today_feed(session, user)
-    if user.pinned_message_id == wizard_id:
-        # Опрос шёл прямо на живом сообщении — возвращаем ленту на месте.
-        await _edit(bot, chat_id, wizard_id, feed_text, feed_keyboard())
+    if entry_date != local_today(user):
+        # Режим одного дня — остаёмся на экране этого дня.
+        await state.set_state(DayView.active)
+        await state.update_data(day=entry_date.isoformat())
+        text = await render_day_feed(session, user, entry_date)
+        keyboard = day_view_keyboard(entry_date)
     else:
-        # Отдельный промпт — удаляем его и обновляем основную ленту.
+        await state.clear()
+        text = await render_today_feed(session, user)
+        keyboard = feed_keyboard()
+
+    if user.pinned_message_id == wizard_id:
+        await _edit(bot, chat_id, wizard_id, text, keyboard)
+    else:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=wizard_id)
         except TelegramBadRequest:
             pass
-        await safe_edit_or_recreate(bot, session, user, feed_text, feed_keyboard())
+        await safe_edit_or_recreate(bot, session, user, text, keyboard)
 
 
 # --- Ручной запуск: выбор даты записи (кнопка «🤕 Голова» на ленте) ---
@@ -148,7 +170,7 @@ async def on_pick_date(callback: CallbackQuery, bot: Bot) -> None:
 # --- Болела голова? ---
 
 @router.callback_query(F.data.startswith("hd:had:"))
-async def on_had(callback: CallbackQuery, bot: Bot) -> None:
+async def on_had(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     # формат: hd:had:<0|1>:<ISO-date>
     _, _, flag, iso = callback.data.split(":", 3)
     had = flag == "1"
@@ -167,7 +189,7 @@ async def on_had(callback: CallbackQuery, bot: Bot) -> None:
             if not had:
                 await _finish(
                     bot, session, user, tg_id, msg_id,
-                    hd.confirm_no_headache(entry_date),
+                    hd.confirm_no_headache(entry_date), entry_date, state,
                 )
             else:
                 await _edit(
@@ -180,7 +202,7 @@ async def on_had(callback: CallbackQuery, bot: Bot) -> None:
 # --- Принимали обезболивающие? ---
 
 @router.callback_query(F.data.startswith("hd:pk:"))
-async def on_painkiller(callback: CallbackQuery, bot: Bot) -> None:
+async def on_painkiller(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     # формат: hd:pk:<0|1>:<entry_id>
     _, _, flag, entry_id_raw = callback.data.split(":", 3)
     took = flag == "1"
@@ -201,6 +223,7 @@ async def on_painkiller(callback: CallbackQuery, bot: Bot) -> None:
                 await _finish(
                     bot, session, user, tg_id, msg_id,
                     hd.confirm_headache(None, took_painkiller=False),
+                    entry.entry_date, state,
                 )
             else:
                 meds = await crud.list_medications(session, user)
@@ -214,7 +237,7 @@ async def on_painkiller(callback: CallbackQuery, bot: Bot) -> None:
 # --- Выбор препарата из списка ---
 
 @router.callback_query(F.data.startswith("hd:med:"))
-async def on_medication_pick(callback: CallbackQuery, bot: Bot) -> None:
+async def on_medication_pick(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     # формат: hd:med:<entry_id>:<med_id>
     _, _, entry_id_raw, med_id_raw = callback.data.split(":", 3)
     entry_id = int(entry_id_raw)
@@ -234,6 +257,7 @@ async def on_medication_pick(callback: CallbackQuery, bot: Bot) -> None:
             await _finish(
                 bot, session, user, tg_id, msg_id,
                 hd.confirm_headache(med.name, took_painkiller=True),
+                entry.entry_date, state,
             )
     await callback.answer()
 
@@ -285,4 +309,5 @@ async def on_medication_text(message: Message, bot: Bot, state: FSMContext) -> N
             await _finish(
                 bot, session, user, tg_id, wizard_id,
                 hd.confirm_headache(med.name, took_painkiller=True),
+                entry.entry_date, state,
             )

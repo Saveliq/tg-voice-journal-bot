@@ -6,6 +6,7 @@ import logging
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery
 
 from bot.db import crud
@@ -46,7 +47,9 @@ def _clicked_message_id(callback: CallbackQuery) -> int | None:
 
 
 @router.callback_query(F.data == CB_FEED)
-async def on_feed(callback: CallbackQuery, bot: Bot) -> None:
+async def on_feed(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
+    # Возврат в обычный режим — выходим из режима одного дня, если он был активен.
+    await state.clear()
     tg_id = callback.from_user.id
     async with user_lock(tg_id):
         async with async_session_factory() as session:
