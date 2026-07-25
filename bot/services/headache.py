@@ -82,8 +82,18 @@ async def send_daily_prompt(bot: Bot, session: AsyncSession, user: User) -> None
     """Отправить пользователю ежедневный вопрос о головной боли за сегодня.
 
     Дата привязана к сообщению (локальное сегодня пользователя) — без выбора даты.
+    Если пользователь уже отметил головную боль за сегодня — вопрос не шлём.
     """
     d = today_date(user)
+
+    existing = await crud.get_headache_entries_for_date(session, user, d)
+    if existing:
+        logger.info(
+            "Пользователь %s уже отметил ГБ за %s — промпт пропущен",
+            user.telegram_id, d.isoformat(),
+        )
+        return
+
     try:
         await bot.send_message(
             chat_id=user.telegram_id,
