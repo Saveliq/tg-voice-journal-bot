@@ -12,6 +12,10 @@ services:
     volumes:
       - xray_config:/xray-config
     command: python /app/xray/generate_config.py
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   proxy:
     image: teddysun/xray:latest
@@ -22,6 +26,10 @@ services:
     depends_on:
       xray-config:
         condition: service_completed_successfully
+    deploy:
+      resources:
+        limits:
+          memory: 128M
 
   bot:
     build: .
@@ -42,6 +50,12 @@ services:
         condition: service_healthy
       proxy:
         condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 1536M  # Жесткий лимит 1.5 ГБ, чтобы Whisper не падал при расшифровке
+        reservations:
+          memory: 1024M  # Мягкий резерв 1 ГБ
 
   db:
     image: postgres:16-alpine
@@ -57,6 +71,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
 
 volumes:
   pgdata:
