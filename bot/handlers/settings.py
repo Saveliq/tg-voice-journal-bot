@@ -1,4 +1,4 @@
-"""Меню настроек: персональное время ежедневного напоминания о ГБ."""
+"""Настройки ежедневных напоминаний о головной боли и таблетке."""
 from __future__ import annotations
 
 import logging
@@ -14,6 +14,8 @@ from bot.db.models import User
 from bot.db.session import async_session_factory
 from bot.handlers.start import delete_user_message
 from bot.keyboards import (
+    CB_SET_PILL_TIME,
+    CB_SET_PILL_TOGGLE,
     CB_SET_TIME,
     CB_SET_TOGGLE,
     CB_SET_TZ,
@@ -32,7 +34,7 @@ _TIME_RE = re.compile(r"^([01]?\d|2[0-3])[:.\s]([0-5]?\d)$")
 _TZ_LABELS = {iana: label for label, iana in TIMEZONES}
 
 ASK_TIME_TEXT = (
-    "🕐 <b>Во сколько присылать напоминание?</b>\n\n"
+    "🕐 <b>Во сколько присылать напоминание {reminder}?</b>\n\n"
     "Отправь время в формате <b>ЧЧ:ММ</b> (в твоём часовом поясе), "
     "например <code>20:00</code>."
 )
@@ -42,6 +44,7 @@ ASK_TZ_TEXT = "🌍 <b>Выбери часовой пояс</b>"
 
 class SettingsStates(StatesGroup):
     awaiting_time = State()
+    awaiting_pill_time = State()
 
 
 def parse_time(value: str) -> str | None:
@@ -54,14 +57,19 @@ def parse_time(value: str) -> str | None:
 
 def _settings_text(user: User) -> str:
     status = "включено ✅" if user.prompt_enabled else "выключено 🔕"
+    pill_status = "включено ✅" if user.pill_prompt_enabled else "выключено 🔕"
     tz_label = _TZ_LABELS.get(user.timezone, user.timezone)
     local = local_now(user).strftime("%H:%M")
     return (
-        "⚙️ <b>Настройки напоминания</b>\n\n"
+        "⚙️ <b>Настройки напоминаний</b>\n\n"
+        "🤕 <b>Головная боль</b>\n"
         f"Время: <b>{user.prompt_time}</b>\n"
+        f"Напоминание: <b>{status}</b>\n\n"
+        "💊 <b>Таблетка</b>\n"
+        f"Время: <b>{user.pill_prompt_time}</b>\n"
+        f"Напоминание: <b>{pill_status}</b>\n\n"
         f"Часовой пояс: <b>{tz_label}</b>\n"
-        f"Сейчас у тебя: <b>{local}</b>\n"
-        f"Напоминание: <b>{status}</b>"
+        f"Сейчас у тебя: <b>{local}</b>"
     )
 
 
@@ -77,36 +85,43 @@ async def on_settings(callback: CallbackQuery, bot: Bot) -> None:
             user = await crud.get_or_create_user(session, tg_id)
             await safe_edit_or_recreate(
                 bot, session, user, _settings_text(user),
-                settings_keyboard(user.prompt_enabled),
+                settings_keyboard(user.prompt_enabled, user.pill_prompt_enabled),
                 prefer_message_id=_clicked_id(callback),
             )
     await callback.answer()
 
 
-@router.callback_query(F.data == CB_SET_TOGGLE)
+@router.callback_query(F.data.in_({CB_SET_TOGGLE, CB_SET_PILL_TOGGLE}))
 async def on_toggle(callback: CallbackQuery, bot: Bot) -> None:
     tg_id = callback.from_user.id
     async with user_lock(tg_id):
         async with async_session_factory() as session:
             user = await crud.get_or_create_user(session, tg_id)
-            await crud.set_prompt_enabled(session, user, not user.prompt_enabled)
+            if callback.data == CB_SET_PILL_TOGGLE:
+                await crud.set_pill_prompt_enabled(session, user, not user.pill_prompt_enabled)
+            else:
+                await crud.set_prompt_enabled(session, user, not user.prompt_enabled)
             await safe_edit_or_recreate(
                 bot, session, user, _settings_text(user),
-                settings_keyboard(user.prompt_enabled),
+                settings_keyboard(user.prompt_enabled, user.pill_prompt_enabled),
                 prefer_message_id=_clicked_id(callback),
             )
     await callback.answer()
 
 
-@router.callback_query(F.data == CB_SET_TIME)
+@router.callback_query(F.data.in_({CB_SET_TIME, CB_SET_PILL_TIME}))
 async def on_set_time(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
     tg_id = callback.from_user.id
-    await state.set_state(SettingsStates.awaiting_time)
+    is_pill = callback.data == CB_SET_PILL_TIME
+    await state.set_state(
+        SettingsStates.awaiting_pill_time if is_pill else SettingsStates.awaiting_time
+    )
+    ask_text = ASK_TIME_TEXT.format(reminder="о таблетке" if is_pill else "о головной боли")
     async with user_lock(tg_id):
         async with async_session_factory() as session:
             user = await crud.get_or_create_user(session, tg_id)
             await safe_edit_or_recreate(
-                bot, session, user, ASK_TIME_TEXT, None,
+                bot, session, user, ask_text, None,
                 prefer_message_id=_clicked_id(callback),
             )
     await callback.answer()
@@ -136,18 +151,20 @@ async def on_tz_pick(callback: CallbackQuery, bot: Bot) -> None:
             await crud.set_timezone(session, user, tz_name)
             await safe_edit_or_recreate(
                 bot, session, user, _settings_text(user),
-                settings_keyboard(user.prompt_enabled),
+                settings_keyboard(user.prompt_enabled, user.pill_prompt_enabled),
                 prefer_message_id=_clicked_id(callback),
             )
     await callback.answer("Часовой пояс обновлён ✅")
 
 
+@router.message(SettingsStates.awaiting_pill_time, F.text)
 @router.message(SettingsStates.awaiting_time, F.text)
 async def on_time_text(message: Message, bot: Bot, state: FSMContext) -> None:
     if message.from_user is None or message.text is None:
         return
     tg_id = message.from_user.id
     hh_mm = parse_time(message.text)
+    is_pill = await state.get_state() == SettingsStates.awaiting_pill_time.state
 
     async with user_lock(tg_id):
         async with async_session_factory() as session:
@@ -164,11 +181,14 @@ async def on_time_text(message: Message, bot: Bot, state: FSMContext) -> None:
                 )
                 return
 
-            await crud.set_prompt_time(session, user, hh_mm)
+            if is_pill:
+                await crud.set_pill_prompt_time(session, user, hh_mm)
+            else:
+                await crud.set_prompt_time(session, user, hh_mm)
             await state.clear()
             # Возврат к экрану настроек с обновлённым временем.
             await safe_edit_or_recreate(
                 bot, session, user, _settings_text(user),
-                settings_keyboard(user.prompt_enabled),
+                settings_keyboard(user.prompt_enabled, user.pill_prompt_enabled),
                 prefer_message_id=user.pinned_message_id,
             )

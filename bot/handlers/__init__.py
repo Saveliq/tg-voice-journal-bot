@@ -10,6 +10,7 @@ from bot.handlers import (
     entries,
     headache,
     menu,
+    pill,
     settings,
     start,
 )
@@ -22,6 +23,7 @@ def register_handlers(dp: Dispatcher) -> None:
     dp.include_router(start.router)
     dp.include_router(admin.router)
     dp.include_router(headache.router)
+    dp.include_router(pill.router)
     dp.include_router(calendar.router)
     dp.include_router(settings.router)
     dp.include_router(menu.router)

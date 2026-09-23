@@ -1,8 +1,6 @@
-"""Планировщик ежедневной рассылки вопроса о головной боли.
+"""Планировщик ежедневных напоминаний о головной боли и таблетке.
 
-Каждый пользователь задаёт своё время (User.prompt_time, HH:MM в своём поясе).
-Планировщик раз в минуту проверяет, у кого локальное время совпало, и шлёт
-вопрос. Это проще и надёжнее, чем держать отдельную задачу на каждого.
+Раз в минуту проверяет оба независимых расписания в часовом поясе пользователя.
 """
 from __future__ import annotations
 
@@ -15,28 +13,32 @@ from apscheduler.triggers.cron import CronTrigger
 from bot.db import crud
 from bot.db.session import async_session_factory
 from bot.services.headache import send_daily_prompt
+from bot.services.pill import send_daily_prompt as send_pill_prompt
 from bot.services.time_utils import local_now
 
 logger = logging.getLogger(__name__)
 
 
 async def dispatch_due_prompts(bot: Bot) -> None:
-    """Разослать вопрос пользователям, у кого ЛОКАЛЬНОЕ время = их prompt_time.
-
-    Раз в минуту проверяем каждого включённого пользователя в его поясе.
-    """
+    """Разослать включённые напоминания при совпадении локального времени."""
     async with async_session_factory() as session:
         users = await crud.get_enabled_users(session)
 
-    due = [u for u in users if local_now(u).strftime("%H:%M") == u.prompt_time]
-    if not due:
-        return
+    for user in users:
+        hh_mm = local_now(user).strftime("%H:%M")
+        headache_due = user.prompt_enabled and hh_mm == user.prompt_time
+        pill_due = user.pill_prompt_enabled and hh_mm == user.pill_prompt_time
+        if not (headache_due or pill_due):
+            continue
 
-    logger.info("Напоминание о ГБ: %d пользователей", len(due))
-    for user in due:
         async with async_session_factory() as session:
+            # Учитываем изменение настроек после получения списка пользователей.
             fresh = await crud.get_or_create_user(session, user.telegram_id)
-            await send_daily_prompt(bot, session, fresh)
+            hh_mm = local_now(fresh).strftime("%H:%M")
+            if fresh.prompt_enabled and hh_mm == fresh.prompt_time:
+                await send_daily_prompt(bot, session, fresh)
+            if fresh.pill_prompt_enabled and hh_mm == fresh.pill_prompt_time:
+                await send_pill_prompt(bot, fresh)
 
 
 def setup_scheduler(bot: Bot) -> AsyncIOScheduler:

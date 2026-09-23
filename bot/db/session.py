@@ -28,6 +28,8 @@ async_session_factory = async_sessionmaker(
 _USER_COLUMNS_MIGRATION = [
     ("prompt_time", "VARCHAR(5)", "'20:00'"),
     ("prompt_enabled", "BOOLEAN", None),  # default зависит от диалекта, см. ниже
+    ("pill_prompt_time", "VARCHAR(5)", "'20:00'"),
+    ("pill_prompt_enabled", "BOOLEAN", None),
 ]
 
 
@@ -46,7 +48,7 @@ def _ensure_user_columns(conn) -> None:
     for name, sql_type, default in _USER_COLUMNS_MIGRATION:
         if name in existing:
             continue
-        if name == "prompt_enabled":
+        if name in {"prompt_enabled", "pill_prompt_enabled"}:
             default = bool_true
         ddl = f"ALTER TABLE users ADD COLUMN {name} {sql_type} DEFAULT {default}"
         logger.info("Миграция users: %s", ddl)

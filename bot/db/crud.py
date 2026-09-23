@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config import settings
@@ -26,6 +26,7 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int) -> User:
         user = User(
             telegram_id=telegram_id,
             prompt_time=settings.headache_prompt_time,
+            pill_prompt_time=settings.pill_prompt_time,
             timezone=settings.default_tz,
         )
         session.add(user)
@@ -115,9 +116,11 @@ async def get_all_users(session: AsyncSession) -> list[User]:
 
 
 async def get_enabled_users(session: AsyncSession) -> list[User]:
-    """Пользователи с включённым ежедневным напоминанием."""
+    """Пользователи хотя бы с одним включённым ежедневным напоминанием."""
     result = await session.execute(
-        select(User).where(User.prompt_enabled.is_(True))
+        select(User).where(
+            or_(User.prompt_enabled.is_(True), User.pill_prompt_enabled.is_(True))
+        )
     )
     return list(result.scalars().all())
 
@@ -138,6 +141,20 @@ async def set_prompt_enabled(
     session: AsyncSession, user: User, enabled: bool
 ) -> None:
     user.prompt_enabled = enabled
+    session.add(user)
+    await session.commit()
+
+
+async def set_pill_prompt_time(session: AsyncSession, user: User, hh_mm: str) -> None:
+    user.pill_prompt_time = hh_mm
+    session.add(user)
+    await session.commit()
+
+
+async def set_pill_prompt_enabled(
+    session: AsyncSession, user: User, enabled: bool
+) -> None:
+    user.pill_prompt_enabled = enabled
     session.add(user)
     await session.commit()
 

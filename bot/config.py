@@ -20,9 +20,10 @@ class Settings(BaseSettings):
     whisper_device: str = "cpu"
     whisper_compute_type: str = "int8"
 
-    # Время ежедневного вопроса о головной боли по умолчанию (HH:MM, в UTC).
+    # Время ежедневных напоминаний по умолчанию (HH:MM, в поясе пользователя).
     # Используется для новых пользователей; каждый может изменить в настройках.
     headache_prompt_time: str = "20:00"
+    pill_prompt_time: str = "20:00"
 
     # Telegram id администратора — доступ к /testprompt
     admin_id: int = 780994100

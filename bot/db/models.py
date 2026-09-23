@@ -45,11 +45,13 @@ class User(Base):
     telegram_id: Mapped[int] = mapped_column(BigInteger, unique=True, index=True)
     # id текущего «единственного» сообщения бота в чате с этим пользователем
     pinned_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    # на будущее — для локального «сегодня» пользователя; сейчас фиксируем UTC
+    # Часовой пояс для локального «сегодня» и времени напоминаний.
     timezone: Mapped[str] = mapped_column(String(64), default="UTC")
-    # Персональное расписание ежедневного вопроса о ГБ (HH:MM в UTC)
+    # Персональные расписания (HH:MM в часовом поясе пользователя).
     prompt_time: Mapped[str] = mapped_column(String(5), default="20:00")
     prompt_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    pill_prompt_time: Mapped[str] = mapped_column(String(5), default="20:00")
+    pill_prompt_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     entries: Mapped[list["Entry"]] = relationship(
