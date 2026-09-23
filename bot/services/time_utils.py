@@ -47,3 +47,16 @@ def day_bounds_utc(user, d: date) -> tuple[datetime, datetime]:
 def today_bounds_utc(user) -> tuple[datetime, datetime]:
     """Границы локального «сегодня» в naive-UTC."""
     return day_bounds_utc(user, local_today(user))
+
+
+def backdated_created_at(user, d: date) -> datetime:
+    """naive-UTC момент для записи «задним числом» на локальный день d.
+
+    Берём текущее локальное время суток, но на дату d — так запись гарантированно
+    попадает в границы локального дня d и сохраняет порядок добавления заметок.
+    """
+    now_local = local_now(user)
+    dt_local = now_local.replace(
+        year=d.year, month=d.month, day=d.day, microsecond=0
+    )
+    return _to_naive_utc(dt_local)

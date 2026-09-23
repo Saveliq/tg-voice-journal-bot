@@ -9,32 +9,95 @@ import asyncio
 import logging
 import os
 import tempfile
+import threading
+from pathlib import Path
 
 from aiogram import Bot
 
 from bot.config import settings
+
+_MODELS_DIR = Path(__file__).parent.parent.parent / "models"
 
 logger = logging.getLogger(__name__)
 
 _model = None  # type: ignore[var-annotated]
 _model_lock = asyncio.Lock()
 
+_MODEL_SIZES_MB = {
+    "tiny": 75, "base": 145, "small": 490,
+    "medium": 1500, "large": 2900, "large-v2": 2900, "large-v3": 2900,
+}
+
+
+def _local_model_path() -> Path | None:
+    path = _MODELS_DIR / settings.whisper_model_size
+    if path.exists() and any(path.iterdir()):
+        return path
+    return None
+
+
+def _is_hf_cached() -> bool:
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        repo_id = f"Systran/faster-whisper-{settings.whisper_model_size}"
+        result = try_to_load_from_cache(repo_id, "model.bin")
+        return result is not None and isinstance(result, str)
+    except Exception:
+        return False
+
+
+def _log_progress(stop_event: threading.Event) -> None:
+    elapsed = 0
+    while not stop_event.wait(10):
+        elapsed += 10
+        logger.info("Скачивание модели Whisper... %d сек", elapsed)
+
 
 def _load_model():
     """Синхронная загрузка модели (вызывается в executor)."""
     from faster_whisper import WhisperModel
 
-    logger.info(
-        "Загружаю Whisper: size=%s device=%s compute=%s",
-        settings.whisper_model_size,
-        settings.whisper_device,
-        settings.whisper_compute_type,
-    )
-    return WhisperModel(
-        settings.whisper_model_size,
-        device=settings.whisper_device,
-        compute_type=settings.whisper_compute_type,
-    )
+    local = _local_model_path()
+
+    if local:
+        logger.info("Загружаю Whisper из локальной папки: %s", local)
+        model_path = str(local)
+        stop_event = None
+    elif _is_hf_cached():
+        logger.info(
+            "Загружаю Whisper из кеша HuggingFace: size=%s device=%s compute=%s",
+            settings.whisper_model_size,
+            settings.whisper_device,
+            settings.whisper_compute_type,
+        )
+        model_path = settings.whisper_model_size
+        stop_event = None
+    else:
+        size_mb = _MODEL_SIZES_MB.get(settings.whisper_model_size, "?")
+        logger.info(
+            "Модель Whisper-%s не найдена локально — скачиваю (~%s МБ). "
+            "Это может занять несколько минут...",
+            settings.whisper_model_size,
+            size_mb,
+        )
+        model_path = settings.whisper_model_size
+        stop_event = threading.Event()
+        threading.Thread(target=_log_progress, args=(stop_event,), daemon=True).start()
+
+    try:
+        model = WhisperModel(
+            model_path,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+        )
+    finally:
+        if stop_event is not None:
+            stop_event.set()
+
+    if stop_event is not None:
+        logger.info("Модель Whisper успешно скачана и загружена.")
+
+    return model
 
 
 async def get_model():

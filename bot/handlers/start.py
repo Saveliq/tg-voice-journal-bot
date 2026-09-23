@@ -6,6 +6,7 @@ import logging
 from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from bot.db import crud
@@ -27,9 +28,10 @@ async def delete_user_message(message: Message) -> None:
 
 
 @router.message(CommandStart())
-async def cmd_start(message: Message, bot: Bot) -> None:
+async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
     if message.from_user is None:
         return
+    await state.clear()
     tg_id = message.from_user.id
 
     async with user_lock(tg_id):
