@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -24,13 +24,17 @@ from bot.db.models import Base, User
 from bot.handlers import pill as pill_handler
 from bot.handlers import settings as settings_handler
 from bot.keyboards import (
+    CB_PILL_MENU,
     CB_PILL_TAKEN,
+    CB_STATS,
+    feed_keyboard,
     CB_SET_PILL_TIME,
     CB_SET_PILL_TOGGLE,
     CB_SET_TIME,
     CB_SET_TOGGLE,
 )
 from bot.services import headache, pill, scheduler
+from bot.services.time_utils import local_today
 
 
 def callback(data: str):
@@ -174,22 +178,80 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(rows[0]), 1)
         self.assertEqual((rows[0][0].text, rows[0][0].callback_data), ("Да", CB_PILL_TAKEN))
 
-    async def test_yes_closes_reminder(self):
-        query = callback(CB_PILL_TAKEN)
-        await pill_handler.on_pill_taken(query, self.bot)
-        query.answer.assert_awaited_once_with(pill.CONFIRM_TEXT)
-        self.bot.delete_message.assert_awaited_once_with(chat_id=101, message_id=17)
-        self.bot.edit_message_text.assert_not_awaited()
+    async def take_pill(self, data):
+        query = callback(data)
+        state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=101, user_id=101))
+        self.addAsyncCleanup(state.storage.close)
+        self.bot.send_message.return_value = SimpleNamespace(message_id=25)
+        with (
+            patch.object(pill_handler, "async_session_factory", self.factory),
+            patch.object(pill_handler.asyncio, "sleep", new_callable=AsyncMock) as sleep,
+        ):
+            await pill_handler.on_pill_taken(query, self.bot, state)
+        query.answer.assert_awaited_once_with()
+        sleep.assert_awaited_once_with(5)
+        self.bot.send_message.assert_awaited_once_with(
+            chat_id=101, text=pill.CONFIRM_TEXT, reply_markup=None,
+        )
+        self.assertIsNone(await state.get_state())
+        saved = await self.load_user()
+        self.assertEqual(saved.pill_taken_date, local_today(saved))
+        buttons = [button for row in feed_keyboard(saved).inline_keyboard for button in row]
+        self.assertEqual(next(b.text for b in buttons if b.callback_data == CB_PILL_MENU), "✅ Выпил")
+        return saved
+
+    async def test_menu_marks_taken_without_deleting_main_message(self):
+        await self.add_user(pinned_message_id=11)
+        saved = await self.take_pill(CB_PILL_MENU)
+        self.assertEqual(saved.pinned_message_id, 17)
+        self.bot.delete_message.assert_awaited_once_with(chat_id=101, message_id=25)
+        edit = self.bot.edit_message_text.await_args.kwargs
+        self.assertEqual(edit["message_id"], 17)
+        self.assertEqual(edit["reply_markup"], feed_keyboard(saved))
+
+    async def test_yes_closes_reminder_and_updates_main_menu(self):
+        await self.add_user(pinned_message_id=11)
+        saved = await self.take_pill(CB_PILL_TAKEN)
+        self.assertEqual(saved.pinned_message_id, 11)
+        deleted = [c.kwargs["message_id"] for c in self.bot.delete_message.await_args_list]
+        self.assertEqual(deleted, [17, 25])
+        edit = self.bot.edit_message_text.await_args.kwargs
+        self.assertEqual(edit["message_id"], 11)
+        self.assertEqual(edit["reply_markup"], feed_keyboard(saved))
 
     async def test_old_reminder_is_confirmed_without_buttons(self):
-        self.bot.delete_message.side_effect = TelegramBadRequest(
+        await self.add_user(pinned_message_id=11)
+        self.bot.delete_message.side_effect = [TelegramBadRequest(
             method=DeleteMessage(chat_id=101, message_id=17),
             message="message can't be deleted",
-        )
-        await pill_handler.on_pill_taken(callback(CB_PILL_TAKEN), self.bot)
-        self.bot.edit_message_text.assert_awaited_once_with(
+        ), None]
+        await self.take_pill(CB_PILL_TAKEN)
+        self.bot.edit_message_text.assert_any_await(
             text=pill.CONFIRM_TEXT, chat_id=101, message_id=17, reply_markup=None
         )
+
+    async def test_menu_status_uses_local_day_and_isolates_users(self):
+        user = await self.add_user(pill_taken_date=date(2026, 9, 24))
+        other = await self.add_user(102)
+        with patch("bot.services.time_utils.datetime") as clock:
+            # Уже следующий день в Москве, хотя в UTC ещё 24 сентября.
+            clock.now.return_value = datetime(2026, 9, 24, 21, 5, tzinfo=timezone.utc)
+            for person, expected in [(user, "💊 Таблетки"), (other, "💊 Таблетки")]:
+                buttons = [b for row in feed_keyboard(person).inline_keyboard for b in row]
+                self.assertNotIn(CB_STATS, [b.callback_data for b in buttons])
+                self.assertEqual(next(b.text for b in buttons if b.callback_data == CB_PILL_MENU), expected)
+            user.pill_taken_date = local_today(user)
+            self.assertEqual(feed_keyboard(user).inline_keyboard[1][0].text, "✅ Выпил")
+            clock.now.return_value += timedelta(days=1)
+            self.assertEqual(feed_keyboard(user).inline_keyboard[1][0].text, "💊 Таблетки")
+
+    async def test_repeated_confirmation_keeps_same_daily_status(self):
+        user = await self.add_user(pinned_message_id=11)
+        await self.take_pill(CB_PILL_MENU)
+        self.bot.reset_mock()
+        saved = await self.take_pill(CB_PILL_MENU)
+        self.assertEqual(saved.id, user.id)
+        self.bot.delete_message.assert_awaited_once_with(chat_id=101, message_id=25)
 
     async def test_blocked_user_does_not_interrupt_sending(self):
         user = await self.add_user()
@@ -226,11 +288,14 @@ class MigrationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(user.prompt_enabled)
                 self.assertEqual(user.pill_prompt_time, "20:00")
                 self.assertTrue(user.pill_prompt_enabled)
+                self.assertIsNone(user.pill_taken_date)
+                await crud.set_pill_taken_date(session, user, date(2026, 9, 25))
                 await crud.set_pill_prompt_time(session, user, "08:30")
                 await crud.set_pill_prompt_enabled(session, user, False)
             await db_session.init_db()
             async with factory() as session:
                 user = await crud.get_user(session, 101)
+                self.assertEqual(user.pill_taken_date, date(2026, 9, 25))
                 self.assertEqual(user.pill_prompt_time, "08:30")
                 self.assertFalse(user.pill_prompt_enabled)
                 self.assertEqual(user.prompt_time, "22:15")

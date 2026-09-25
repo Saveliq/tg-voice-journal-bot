@@ -32,4 +32,4 @@ async def on_other(message: Message, bot: Bot) -> None:
             user = await crud.get_or_create_user(session, tg_id)
             await delete_user_message(message)
             text = await render_today_feed(session, user)
-            await safe_edit_or_recreate(bot, session, user, text, feed_keyboard())
+            await safe_edit_or_recreate(bot, session, user, text, feed_keyboard(user))

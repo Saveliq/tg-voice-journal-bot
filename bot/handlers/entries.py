@@ -28,7 +28,7 @@ TRANSIENT_DELAY = 2.5  # сек — показ коротких уведомле
 
 async def _refresh_feed(bot: Bot, session, user) -> None:
     text = await render_today_feed(session, user)
-    await safe_edit_or_recreate(bot, session, user, text, feed_keyboard())
+    await safe_edit_or_recreate(bot, session, user, text, feed_keyboard(user))
 
 
 @router.message(StateFilter(None), F.text & ~F.text.startswith("/"))
@@ -62,7 +62,7 @@ async def on_voice(message: Message, bot: Bot) -> None:
 
             # Промежуточный статус, чтобы бот не выглядел зависшим.
             await safe_edit_or_recreate(
-                bot, session, user, VOICE_PROGRESS, feed_keyboard()
+                bot, session, user, VOICE_PROGRESS, feed_keyboard(user)
             )
 
             text = ""
@@ -77,7 +77,7 @@ async def on_voice(message: Message, bot: Bot) -> None:
             if not text:
                 # Короткое уведомление, затем возврат ленты.
                 await safe_edit_or_recreate(
-                    bot, session, user, VOICE_FAILED, feed_keyboard()
+                    bot, session, user, VOICE_FAILED, feed_keyboard(user)
                 )
                 await asyncio.sleep(TRANSIENT_DELAY)
                 await _refresh_feed(bot, session, user)

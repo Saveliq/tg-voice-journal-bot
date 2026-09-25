@@ -30,6 +30,7 @@ _USER_COLUMNS_MIGRATION = [
     ("prompt_enabled", "BOOLEAN", None),  # default зависит от диалекта, см. ниже
     ("pill_prompt_time", "VARCHAR(5)", "'20:00'"),
     ("pill_prompt_enabled", "BOOLEAN", None),
+    ("pill_taken_date", "DATE", "NULL"),
 ]
 
 

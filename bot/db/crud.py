@@ -162,6 +162,12 @@ async def set_pill_prompt_enabled(
     await session.commit()
 
 
+async def set_pill_taken_date(session: AsyncSession, user: User, day: date) -> None:
+    user.pill_taken_date = day
+    session.add(user)
+    await session.commit()
+
+
 # --- Препараты ---
 
 async def get_or_create_medication(

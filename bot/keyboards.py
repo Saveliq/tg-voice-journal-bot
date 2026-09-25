@@ -7,7 +7,8 @@ from datetime import date, timedelta
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
-from bot.db.models import Medication
+from bot.db.models import Medication, User
+from bot.services.time_utils import local_today
 
 # callback_data константы — используются и при построении, и при фильтрации
 CB_FEED = "feed"
@@ -27,6 +28,7 @@ CB_SET_PILL_TOGGLE = "set:pill:toggle"
 
 # Напоминание о таблетке
 CB_PILL_TAKEN = "pill:taken"
+CB_PILL_MENU = "pill:menu"
 
 # Календарь. Режим в callback задаёт поведение тапа по дате:
 #   cal:open              — открыть календарь-отчёт (текущий месяц)
@@ -68,7 +70,7 @@ def _date_btn_label(d: date) -> str:
     return f"{_WD_SHORT[d.weekday()]} {d.day} {_MON_GEN[d.month - 1]}"
 
 
-def feed_keyboard() -> InlineKeyboardMarkup:
+def feed_keyboard(user: User) -> InlineKeyboardMarkup:
     """Главное меню под лентой."""
     kb = InlineKeyboardBuilder()
     kb.row(
@@ -76,7 +78,10 @@ def feed_keyboard() -> InlineKeyboardMarkup:
         InlineKeyboardButton(text="📅 Календарь", callback_data=CB_CALENDAR),
     )
     kb.row(
-        InlineKeyboardButton(text="📊 Статистика", callback_data=CB_STATS),
+        InlineKeyboardButton(
+            text="✅ Выпил" if user.pill_taken_date == local_today(user) else "💊 Таблетки",
+            callback_data=CB_PILL_MENU,
+        ),
         InlineKeyboardButton(text="📤 Экспорт", callback_data=CB_EXPORT),
     )
     kb.row(InlineKeyboardButton(text="⚙️ Настройки", callback_data=CB_SETTINGS))

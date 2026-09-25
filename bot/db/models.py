@@ -52,6 +52,7 @@ class User(Base):
     prompt_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     pill_prompt_time: Mapped[str] = mapped_column(String(5), default="20:00")
     pill_prompt_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    pill_taken_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     entries: Mapped[list["Entry"]] = relationship(

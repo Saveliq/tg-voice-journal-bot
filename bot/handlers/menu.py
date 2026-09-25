@@ -56,7 +56,7 @@ async def on_feed(callback: CallbackQuery, bot: Bot, state: FSMContext) -> None:
             user = await crud.get_or_create_user(session, tg_id)
             text = await render_today_feed(session, user)
             await safe_edit_or_recreate(
-                bot, session, user, text, feed_keyboard(),
+                bot, session, user, text, feed_keyboard(user),
                 prefer_message_id=_clicked_message_id(callback),
             )
     await callback.answer()

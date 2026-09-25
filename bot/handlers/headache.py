@@ -109,7 +109,7 @@ async def _finish(
     else:
         await state.clear()
         text = await render_today_feed(session, user)
-        keyboard = feed_keyboard()
+        keyboard = feed_keyboard(user)
 
     if user.pinned_message_id == wizard_id:
         await _edit(bot, chat_id, wizard_id, text, keyboard)
@@ -301,7 +301,7 @@ async def on_medication_text(message: Message, bot: Bot, state: FSMContext) -> N
 
             if entry is None or not name or wizard_id is None:
                 feed_text = await render_today_feed(session, user)
-                await safe_edit_or_recreate(bot, session, user, feed_text, feed_keyboard())
+                await safe_edit_or_recreate(bot, session, user, feed_text, feed_keyboard(user))
                 return
 
             med = await crud.get_or_create_medication(session, user, name)

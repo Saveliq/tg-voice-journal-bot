@@ -39,7 +39,7 @@ async def cmd_start(message: Message, bot: Bot, state: FSMContext) -> None:
             user = await crud.get_or_create_user(session, tg_id)
             text = await render_today_feed(session, user)
             await safe_edit_or_recreate(
-                bot, session, user, text, feed_keyboard()
+                bot, session, user, text, feed_keyboard(user)
             )
 
     await delete_user_message(message)
