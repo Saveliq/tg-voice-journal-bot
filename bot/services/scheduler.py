@@ -35,7 +35,7 @@ async def dispatch_due_prompts(bot: Bot) -> None:
         if not (headache_due or pill_due):
             continue
 
-        async with async_session_factory() as session:
+        async with user_lock(user.telegram_id), async_session_factory() as session:
             # Учитываем изменение настроек после получения списка пользователей.
             fresh = await crud.get_or_create_user(session, user.telegram_id)
             hh_mm = local_now(fresh).strftime("%H:%M")

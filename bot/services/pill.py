@@ -8,6 +8,7 @@ from aiogram.exceptions import TelegramForbiddenError
 
 from bot.db.models import User
 from bot.keyboards import pill_ask_keyboard
+from bot.services.time_utils import local_today
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,9 @@ CONFIRM_TEXT = "Таблетка принята ✅"
 
 
 async def send_daily_prompt(bot: Bot, user: User) -> None:
+    if user.pill_taken_date == local_today(user):
+        return
+
     try:
         await bot.send_message(
             chat_id=user.telegram_id,

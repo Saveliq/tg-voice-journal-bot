@@ -98,6 +98,47 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
             (7, pill.PROMPT_TEXT), (8, pill.PROMPT_TEXT),
         ])
 
+    async def test_scheduler_skips_pill_taken_on_local_today(self):
+        # In Moscow it is already September 26; in UTC it is still September 25.
+        await self.add_user(1, prompt_time="00:05", pill_prompt_time="00:05",
+                            pill_taken_date=date(2026, 9, 26))
+        await self.add_user(2, prompt_enabled=False, pill_prompt_time="00:05",
+                            pill_taken_date=date(2026, 9, 25))
+        await self.add_user(3, prompt_enabled=False, pill_prompt_time="00:05")
+        await self.add_user(4, timezone="UTC", prompt_enabled=False,
+                            pill_prompt_time="21:05", pill_taken_date=date(2026, 9, 25))
+        with (
+            patch.object(scheduler, "async_session_factory", self.factory),
+            patch("bot.services.time_utils.datetime", wraps=datetime) as clock,
+        ):
+            clock.now.return_value = datetime(2026, 9, 25, 21, 5, tzinfo=timezone.utc)
+            await scheduler.dispatch_due_prompts(self.bot)
+        self.assertCountEqual(
+            [(c.kwargs["chat_id"], c.kwargs["text"])
+             for c in self.bot.send_message.await_args_list],
+            [(1, headache.PROMPT_TEXT), (2, pill.PROMPT_TEXT), (3, pill.PROMPT_TEXT)],
+        )
+
+    async def test_confirmation_suppresses_reminder_only_for_current_day(self):
+        await self.add_user(pinned_message_id=11, prompt_enabled=False)
+        with (
+            patch.object(scheduler, "async_session_factory", self.factory),
+            patch("bot.services.time_utils.datetime", wraps=datetime) as clock,
+        ):
+            for data in (CB_PILL_MENU, CB_PILL_TAKEN):
+                with self.subTest(data=data):
+                    self.bot.reset_mock()
+                    clock.now.return_value = datetime(2026, 9, 25, 16, 0, tzinfo=timezone.utc)
+                    await self.take_pill(data)
+                    self.bot.reset_mock()
+                    clock.now.return_value += timedelta(hours=1)
+                    await scheduler.dispatch_due_prompts(self.bot)
+                    self.bot.send_message.assert_not_awaited()
+                    clock.now.return_value += timedelta(days=1)
+                    await scheduler.dispatch_due_prompts(self.bot)
+                    self.bot.send_message.assert_awaited_once()
+                    self.assertEqual(self.bot.send_message.await_args.kwargs["text"], pill.PROMPT_TEXT)
+
     async def test_midnight_refresh_uses_local_day_even_without_reminders(self):
         self.bot.id = 1
         dp = Dispatcher()
