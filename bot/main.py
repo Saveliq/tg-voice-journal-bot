@@ -50,8 +50,8 @@ async def main() -> None:
     except Exception:  # noqa: BLE001 — бот должен стартовать даже без модели
         logger.exception("Не удалось загрузить Whisper-модель при старте")
 
-    # Ежедневные напоминания о головной боли и таблетке.
-    scheduler = setup_scheduler(bot)
+    # Ежедневные напоминания и обновление ленты в локальную полночь.
+    scheduler = setup_scheduler(bot, dp)
 
     logger.info("Бот запущен. Начинаю polling.")
     try:

@@ -10,17 +10,18 @@ from unittest.mock import AsyncMock, patch
 # Never connect to the database configured in the developer's .env.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 
+from aiogram import Dispatcher
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.methods import DeleteMessage, SendMessage
+from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from bot.db import crud
 from bot.db import session as db_session
-from bot.db.models import Base, User
+from bot.db.models import Base, SourceType, User
 from bot.handlers import pill as pill_handler
 from bot.handlers import settings as settings_handler
 from bot.keyboards import (
@@ -83,7 +84,7 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
         await self.add_user(8, timezone="UTC", pill_prompt_time="17:00")
         with (
             patch.object(scheduler, "async_session_factory", self.factory),
-            patch("bot.services.time_utils.datetime") as clock,
+            patch("bot.services.time_utils.datetime", wraps=datetime) as clock,
         ):
             clock.now.return_value = datetime(2026, 9, 23, 17, 0, tzinfo=timezone.utc)
             await scheduler.dispatch_due_prompts(self.bot)
@@ -96,6 +97,101 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
             (4, headache.PROMPT_TEXT), (4, pill.PROMPT_TEXT),
             (7, pill.PROMPT_TEXT), (8, pill.PROMPT_TEXT),
         ])
+
+    async def test_midnight_refresh_uses_local_day_even_without_reminders(self):
+        self.bot.id = 1
+        dp = Dispatcher()
+        self.addAsyncCleanup(dp.storage.close)
+        user = await self.add_user(
+            pinned_message_id=17, prompt_enabled=False, pill_prompt_enabled=False,
+            pill_taken_date=date(2026, 9, 25),
+        )
+        await self.add_user(102, timezone="UTC", pinned_message_id=18)
+        await self.add_user(103, timezone="Europe/Samara", pinned_message_id=19)
+        await self.add_user(104, pinned_message_id=None)
+        state = dp.fsm.get_context(bot=self.bot, chat_id=101, user_id=101)
+        await state.set_state("DayView:active")
+        await state.update_data(day="2026-09-24")
+        async with self.factory() as session:
+            await crud.add_entry(session, user, "Вчерашняя запись", SourceType.text,
+                                 created_at=datetime(2026, 9, 25, 20, 59))
+            await crud.add_entry(session, user, "Новая запись", SourceType.text,
+                                 created_at=datetime(2026, 9, 25, 21, 0))
+        with (
+            patch.object(scheduler, "async_session_factory", self.factory),
+            patch("bot.services.time_utils.datetime", wraps=datetime) as clock,
+        ):
+            clock.now.return_value = datetime(2026, 9, 25, 20, 59, tzinfo=timezone.utc)
+            await scheduler.refresh_midnight_feeds(self.bot, dp)
+            self.bot.edit_message_text.assert_not_awaited()
+            clock.now.return_value = datetime(2026, 9, 25, 21, 0, tzinfo=timezone.utc)
+            await scheduler.refresh_midnight_feeds(self.bot, dp)
+            clock.now.return_value += timedelta(minutes=1)
+            await scheduler.refresh_midnight_feeds(self.bot, dp)
+        self.bot.edit_message_text.assert_awaited_once()
+        edit = self.bot.edit_message_text.await_args.kwargs
+        self.assertEqual((edit["chat_id"], edit["message_id"]), (101, 17))
+        self.assertIn("Суббота, 26 сентября", edit["text"])
+        self.assertIn("Новая запись", edit["text"])
+        self.assertNotIn("Вчерашняя запись", edit["text"])
+        self.assertEqual(edit["reply_markup"].inline_keyboard[1][0].text, "💊 Таблетки")
+        self.assertIsNone(await state.get_state())
+        self.assertEqual(await state.get_data(), {})
+        self.bot.send_message.assert_not_awaited()
+        self.assertEqual((await self.load_user()).pill_taken_date, date(2026, 9, 25))
+
+    async def test_midnight_supports_half_hour_timezone_and_keeps_new_day_pill(self):
+        self.bot.id = 1
+        dp = Dispatcher()
+        self.addAsyncCleanup(dp.storage.close)
+        await self.add_user(timezone="Asia/Kolkata", pinned_message_id=17,
+                            pill_taken_date=date(2026, 9, 26))
+        with (
+            patch.object(scheduler, "async_session_factory", self.factory),
+            patch("bot.services.time_utils.datetime", wraps=datetime) as clock,
+        ):
+            clock.now.return_value = datetime(2026, 9, 25, 18, 30, tzinfo=timezone.utc)
+            await scheduler.refresh_midnight_feeds(self.bot, dp)
+        self.bot.edit_message_text.assert_awaited_once()
+        edit = self.bot.edit_message_text.await_args.kwargs
+        self.assertIn("26 сентября", edit["text"])
+        self.assertEqual(edit["reply_markup"].inline_keyboard[1][0].text, "✅ Выпил")
+
+    async def test_midnight_blocked_chat_does_not_stop_other_users(self):
+        self.bot.id = 1
+        dp = Dispatcher()
+        self.addAsyncCleanup(dp.storage.close)
+        await self.add_user(pinned_message_id=17)
+        await self.add_user(102, pinned_message_id=18)
+        self.bot.edit_message_text.side_effect = [TelegramForbiddenError(
+            method=EditMessageText(chat_id=101, message_id=17, text="test"),
+            message="bot was blocked by the user",
+        ), None]
+        with (
+            patch.object(scheduler, "async_session_factory", self.factory),
+            patch("bot.services.time_utils.datetime", wraps=datetime) as clock,
+        ):
+            clock.now.return_value = datetime(2026, 9, 25, 21, 0, tzinfo=timezone.utc)
+            await scheduler.refresh_midnight_feeds(self.bot, dp)
+        self.assertEqual(
+            [c.kwargs["chat_id"] for c in self.bot.edit_message_text.await_args_list],
+            [101, 102],
+        )
+
+    async def test_scheduler_registers_midnight_refresh_every_minute(self):
+        dp = Dispatcher()
+        self.addAsyncCleanup(dp.storage.close)
+        with patch.object(scheduler.AsyncIOScheduler, "start"):
+            jobs = scheduler.setup_scheduler(self.bot, dp)
+        job = jobs.get_job("midnight_feed_refresh")
+        self.assertIsNotNone(job)
+        self.assertIs(job.func, scheduler.refresh_midnight_feeds)
+        self.assertEqual(job.kwargs, {"bot": self.bot, "dispatcher": dp})
+        now = datetime(2026, 9, 25, 18, 29, 59, tzinfo=timezone.utc)
+        first = job.trigger.get_next_fire_time(None, now)
+        second = job.trigger.get_next_fire_time(first, first)
+        self.assertEqual(first, now + timedelta(seconds=1))
+        self.assertEqual(second - first, timedelta(minutes=1))
 
     async def test_new_user_uses_configured_default(self):
         with patch.object(crud.settings, "pill_prompt_time", "08:45"):
@@ -233,7 +329,7 @@ class ReminderTests(unittest.IsolatedAsyncioTestCase):
     async def test_menu_status_uses_local_day_and_isolates_users(self):
         user = await self.add_user(pill_taken_date=date(2026, 9, 24))
         other = await self.add_user(102)
-        with patch("bot.services.time_utils.datetime") as clock:
+        with patch("bot.services.time_utils.datetime", wraps=datetime) as clock:
             # Уже следующий день в Москве, хотя в UTC ещё 24 сентября.
             clock.now.return_value = datetime(2026, 9, 24, 21, 5, tzinfo=timezone.utc)
             for person, expected in [(user, "💊 Таблетки"), (other, "💊 Таблетки")]:

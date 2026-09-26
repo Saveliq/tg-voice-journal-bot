@@ -1,19 +1,23 @@
-"""Планировщик ежедневных напоминаний о головной боли и таблетке.
+"""Планировщик напоминаний и обновления ленты в полночь.
 
-Раз в минуту проверяет оба независимых расписания в часовом поясе пользователя.
+Раз в минуту проверяет локальное время в часовом поясе пользователя.
 """
 from __future__ import annotations
 
 import logging
 
-from aiogram import Bot
+from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramForbiddenError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from bot.db import crud
 from bot.db.session import async_session_factory
+from bot.keyboards import feed_keyboard
+from bot.services.feed import render_today_feed
 from bot.services.headache import send_daily_prompt
 from bot.services.pill import send_daily_prompt as send_pill_prompt
+from bot.services.singleton_message import safe_edit_or_recreate, user_lock
 from bot.services.time_utils import local_now
 
 logger = logging.getLogger(__name__)
@@ -41,7 +45,39 @@ async def dispatch_due_prompts(bot: Bot) -> None:
                 await send_pill_prompt(bot, fresh)
 
 
-def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
+async def refresh_midnight_feeds(bot: Bot, dispatcher: Dispatcher) -> None:
+    """Обновить главное сообщение на новый день в локальные 00:00."""
+    async with async_session_factory() as session:
+        users = await crud.get_all_users(session)
+
+    for user in users:
+        if user.pinned_message_id is None or local_now(user).strftime("%H:%M") != "00:00":
+            continue
+        try:
+            async with user_lock(user.telegram_id):
+                async with async_session_factory() as session:
+                    # Настройки и главное сообщение могли измениться до получения блокировки.
+                    fresh = await crud.get_user(session, user.telegram_id)
+                    if (
+                        fresh is None
+                        or fresh.pinned_message_id is None
+                        or local_now(fresh).strftime("%H:%M") != "00:00"
+                    ):
+                        continue
+                    text = await render_today_feed(session, fresh)
+                    await safe_edit_or_recreate(bot, session, fresh, text, feed_keyboard(fresh))
+                    # После возврата к ленте ввод снова относится к сегодняшнему дню.
+                    state = dispatcher.fsm.get_context(
+                        bot=bot, chat_id=fresh.telegram_id, user_id=fresh.telegram_id,
+                    )
+                    await state.clear()
+        except TelegramForbiddenError:
+            logger.info("Пользователь %s заблокировал бота, пропуск обновления ленты", user.telegram_id)
+        except Exception:  # noqa: BLE001 — ошибка одного чата не мешает остальным
+            logger.exception("Не удалось обновить ленту в полночь user=%s", user.telegram_id)
+
+
+def setup_scheduler(bot: Bot, dispatcher: Dispatcher) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
     # Каждую минуту в :00 секунд — проверяем, кому пора.
     scheduler.add_job(
@@ -52,6 +88,14 @@ def setup_scheduler(bot: Bot) -> AsyncIOScheduler:
         replace_existing=True,
         misfire_grace_time=30,
     )
+    scheduler.add_job(
+        refresh_midnight_feeds,
+        trigger=CronTrigger(second=0, timezone="UTC"),
+        kwargs={"bot": bot, "dispatcher": dispatcher},
+        id="midnight_feed_refresh",
+        replace_existing=True,
+        misfire_grace_time=30,
+    )
     scheduler.start()
-    logger.info("Планировщик запущен: проверка напоминаний раз в минуту (UTC)")
+    logger.info("Планировщик запущен: проверка напоминаний и смены дня раз в минуту (UTC)")
     return scheduler
