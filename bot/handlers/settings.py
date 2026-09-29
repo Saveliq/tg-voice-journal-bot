@@ -14,6 +14,7 @@ from bot.db.models import User
 from bot.db.session import async_session_factory
 from bot.handlers.start import delete_user_message
 from bot.keyboards import (
+    CB_SET_PILL_RESET,
     CB_SET_PILL_TIME,
     CB_SET_PILL_TOGGLE,
     CB_SET_TIME,
@@ -25,7 +26,7 @@ from bot.keyboards import (
     timezone_keyboard,
 )
 from bot.services.singleton_message import safe_edit_or_recreate, user_lock
-from bot.services.time_utils import local_now
+from bot.services.time_utils import local_now, local_today
 
 logger = logging.getLogger(__name__)
 router = Router(name="settings")
@@ -89,6 +90,20 @@ async def on_settings(callback: CallbackQuery, bot: Bot) -> None:
                 prefer_message_id=_clicked_id(callback),
             )
     await callback.answer()
+
+
+@router.callback_query(F.data == CB_SET_PILL_RESET)
+async def on_pill_reset(callback: CallbackQuery) -> None:
+    tg_id = callback.from_user.id
+    async with user_lock(tg_id):
+        async with async_session_factory() as session:
+            user = await crud.get_or_create_user(session, tg_id)
+            if user.pill_taken_date == local_today(user):
+                await crud.set_pill_taken_date(session, user, None)
+                text = "Отметка о приёме таблеток за сегодня сброшена"
+            else:
+                text = "За сегодня нет отметки о приёме таблеток"
+    await callback.answer(text)
 
 
 @router.callback_query(F.data.in_({CB_SET_TOGGLE, CB_SET_PILL_TOGGLE}))

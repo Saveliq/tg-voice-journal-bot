@@ -25,6 +25,7 @@ CB_SET_TOGGLE = "set:toggle"
 CB_SET_TZ = "set:tz"
 CB_SET_PILL_TIME = "set:pill:time"
 CB_SET_PILL_TOGGLE = "set:pill:toggle"
+CB_SET_PILL_RESET = "set:pill:reset"
 
 # Напоминание о таблетке
 CB_PILL_TAKEN = "pill:taken"
@@ -218,6 +219,9 @@ def settings_keyboard(
     kb.row(InlineKeyboardButton(text=toggle_text, callback_data=CB_SET_TOGGLE))
     kb.row(InlineKeyboardButton(text="🕐 Время: таблетка", callback_data=CB_SET_PILL_TIME))
     kb.row(InlineKeyboardButton(text=pill_toggle_text, callback_data=CB_SET_PILL_TOGGLE))
+    kb.row(InlineKeyboardButton(
+        text="↩️ Сбросить приём таблеток за сегодня", callback_data=CB_SET_PILL_RESET,
+    ))
     kb.row(InlineKeyboardButton(text="🌍 Часовой пояс", callback_data=CB_SET_TZ))
     kb.row(InlineKeyboardButton(text="⬅️ Назад к ленте", callback_data=CB_FEED))
     return kb.as_markup()
